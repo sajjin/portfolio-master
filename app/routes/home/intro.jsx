@@ -7,15 +7,12 @@ import { Transition } from '~/components/transition';
 import { VisuallyHidden } from '~/components/visually-hidden';
 import { Link as RouterLink } from '@remix-run/react';
 import { useInterval, usePrevious, useScrollToHash } from '~/hooks';
-import { Suspense, lazy, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { cssProps } from '~/utils/style';
 import config from '~/config.json';
 import { useHydrated } from '~/hooks/useHydrated';
+import { DisplacementSphere } from './displacement-sphere';
 import styles from './intro.module.css';
-
-const DisplacementSphere = lazy(() =>
-  import('./displacement-sphere').then(module => ({ default: module.DisplacementSphere }))
-);
 
 export function Intro({ id, sectionRef, scrollIndicatorHidden, ...rest }) {
   const { theme } = useTheme();
@@ -63,11 +60,7 @@ export function Intro({ id, sectionRef, scrollIndicatorHidden, ...rest }) {
       <Transition in key={theme} timeout={3000}>
         {({ visible, status }) => (
           <>
-            {isHydrated && (
-              <Suspense>
-                <DisplacementSphere />
-              </Suspense>
-            )}
+            {isHydrated && <DisplacementSphere />}
             <header className={styles.text}>
               <h1 className={styles.name} data-visible={visible} id={titleId}>
                 <DecoderText text={config.name} delay={500} />
