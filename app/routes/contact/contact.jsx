@@ -31,22 +31,63 @@ const MAX_MESSAGE_LENGTH = 4096;
 const EMAIL_PATTERN = /(.+)@(.+){2,}\.(.+){2,}/;
 
 export async function action({ context, request }) {
-  const ses = new SESClient({
-    region: 'us-west-1',
-    credentials: {
-      accessKeyId: context.cloudflare.env.AWS_ACCESS_KEY_ID,
-      secretAccessKey: context.cloudflare.env.AWS_SECRET_ACCESS_KEY,
-    },
-  });
+  console.log('=== Contact Form Debug ===');
+  console.log('Environment variables check:');
+  console.log('AWS_ACCESS_KEY_ID exists:', !!context.cloudflare.env.AWS_ACCESS_KEY_ID);
+  console.log('AWS_SECRET_ACCESS_KEY exists:', !!context.cloudflare.env.AWS_SECRET_ACCESS_KEY);
+  console.log('EMAIL exists:', !!context.cloudflare.env.EMAIL);
+  console.log('FROM_EMAIL exists:', !!context.cloudflare.env.FROM_EMAIL);
+  console.log('EMAIL value:', context.cloudflare.env.EMAIL);
+  console.log('FROM_EMAIL value:', context.cloudflare.env.FROM_EMAIL);
+
+  // Check if required environment variables exist
+  if (!context.cloudflare.env.AWS_ACCESS_KEY_ID || 
+      !context.cloudflare.env.AWS_SECRET_ACCESS_KEY || 
+      !context.cloudflare.env.EMAIL || 
+      !context.cloudflare.env.FROM_EMAIL) {
+    console.error('Missing required environment variables');
+    return json({ 
+      errors: { 
+        message: 'Server configuration error. Please contact the administrator.' 
+      } 
+    }, { status: 500 });
+  }
+
+  let ses;
+  try {
+    ses = new SESClient({
+      region: 'us-west-2',
+      credentials: {
+        accessKeyId: context.cloudflare.env.AWS_ACCESS_KEY_ID,
+        secretAccessKey: context.cloudflare.env.AWS_SECRET_ACCESS_KEY,
+      },
+    });
+    console.log('SES Client created successfully');
+  } catch (error) {
+    console.error('Failed to create SES client:', error);
+    return json({ 
+      errors: { 
+        message: 'Failed to initialize email service.' 
+      } 
+    }, { status: 500 });
+  }
 
   const formData = await request.formData();
   const isBot = String(formData.get('name'));
-  const email = String(formData.get('email'));
-  const message = String(formData.get('message'));
+  const email = String(formData.get('email')).trim();
+  const message = String(formData.get('message')).trim();
   const errors = {};
 
+  console.log('Form data received:');
+  console.log('Bot check (should be empty):', isBot);
+  console.log('Email:', email);
+  console.log('Message length:', message.length);
+
   // Return without sending if a bot trips the honeypot
-  if (isBot) return json({ success: true });
+  if (isBot) {
+    console.log('Bot detected, returning success without sending');
+    return json({ success: true });
+  }
 
   // Handle input validation on the server
   if (!email || !EMAIL_PATTERN.test(email)) {
@@ -66,31 +107,80 @@ export async function action({ context, request }) {
   }
 
   if (Object.keys(errors).length > 0) {
+    console.log('Validation errors:', errors);
     return json({ errors });
   }
 
-  // Send email via Amazon SES
-  await ses.send(
-    new SendEmailCommand({
-      Destination: {
-        ToAddresses: [context.cloudflare.env.EMAIL],
-      },
-      Message: {
-        Body: {
-          Text: {
-            Data: `From: ${email}\n\n${message}`,
-          },
-        },
-        Subject: {
-          Data: `Portfolio message from ${email}`,
-        },
-      },
-      Source: `Portfolio <${context.cloudflare.env.FROM_EMAIL}>`,
-      ReplyToAddresses: [email],
-    })
-  );
+  console.log('Preparing to send email...');
+  
+  const emailParams = {
+    Destination: {
+      ToAddresses: [context.cloudflare.env.EMAIL],
+    },
+    Message: {
+      Body: {
+        Text: {
+          Data: `New contact form submission from your portfolio:
 
-  return json({ success: true });
+From: ${email}
+
+Message:
+${message}
+
+---
+This email was sent from your portfolio contact form.`,
+        },
+      },
+      Subject: {
+        Data: `Portfolio Contact: ${email}`,
+      },
+    },
+    Source: context.cloudflare.env.FROM_EMAIL,
+    ReplyToAddresses: [email],
+  };
+
+  console.log('Email parameters:', {
+    to: emailParams.Destination.ToAddresses[0],
+    from: emailParams.Source,
+    subject: emailParams.Message.Subject.Data
+  });
+
+  try {
+    console.log('Attempting to send email...');
+    const result = await ses.send(new SendEmailCommand(emailParams));
+    console.log('Email sent successfully:', result.MessageId);
+    return json({ success: true });
+
+  } catch (error) {
+    console.error('=== SES ERROR DETAILS ===');
+    console.error('Error name:', error.name);
+    console.error('Error message:', error.message);
+    console.error('Error code:', error.code);
+    console.error('Full error:', error);
+
+    // Check for specific SES errors
+    let userMessage = 'Failed to send message. Please try again later.';
+    
+    if (error.name === 'MessageRejected') {
+      console.error('SES rejected the message - check email verification');
+      userMessage = 'Email service configuration issue. Please contact directly.';
+    } else if (error.name === 'SendingPausedException') {
+      console.error('SES sending is paused - account may be in sandbox');
+      userMessage = 'Email service is temporarily unavailable.';
+    } else if (error.code === 'InvalidParameterValue') {
+      console.error('Invalid parameter - likely unverified email address');
+      userMessage = 'Email configuration error. Please contact directly.';
+    } else if (error.name === 'CredentialsProviderError') {
+      console.error('AWS credentials error');
+      userMessage = 'Authentication error. Please contact the administrator.';
+    }
+    
+    return json({ 
+      errors: { 
+        message: userMessage 
+      } 
+    }, { status: 500 });
+  }
 }
 
 export const Contact = () => {
